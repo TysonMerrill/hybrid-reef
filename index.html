@@ -90,6 +90,25 @@ body{
 .modal p{ margin:0; color:var(--muted); font-size:14px; }
 .modal input{ background:var(--ground); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:10px 12px; font:16px var(--body); }
 .modal .err{ color:var(--coral); font-size:13px; min-height:1em; }
+.gate{ position:fixed; inset:0; z-index:20; background:var(--ground); overflow:auto; display:flex; justify-content:center; align-items:flex-start;
+  padding:calc(28px + env(safe-area-inset-top, 0px)) 16px calc(96px + env(safe-area-inset-bottom, 0px)); }
+.gate-card{ width:min(440px,100%); display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center; }
+.gate-icon{ width:96px; height:96px; border-radius:22px; image-rendering:pixelated; box-shadow:0 6px 24px rgba(0,0,0,.4); }
+.gate h2{ margin:4px 0 0; font-family:var(--display); font-size:34px; color:var(--sand); line-height:1.05; }
+.gate-lede{ margin:0; color:var(--muted); max-width:36ch; }
+.steps{ list-style:none; margin:6px 0 0; padding:0; width:100%; display:flex; flex-direction:column; gap:8px; text-align:left; counter-reset:step; }
+.steps li{ display:grid; grid-template-columns:34px 1fr; gap:12px; align-items:center; background:var(--panel); border-radius:6px; padding:12px 14px; counter-increment:step; font-size:15px; line-height:1.4; }
+.steps li::before{ content:counter(step); display:grid; place-items:center; width:34px; height:34px; border-radius:50%; background:var(--panel2); color:var(--sand); font-family:var(--display); font-size:18px; }
+.steps b{ color:var(--text); }
+.glyph{ display:inline-grid; place-items:center; vertical-align:-6px; width:26px; height:26px; border-radius:6px; background:var(--panel2); color:#5aa9ff; margin:0 2px; }
+.glyph svg{ width:17px; height:17px; }
+.gate-note{ font-size:13px; color:var(--muted); margin:0; }
+.gate-warn{ width:100%; background:#3a2418; border:1px solid var(--coral-deep); color:#ffd9cc; border-radius:6px; padding:12px 14px; font-size:14px; text-align:left; }
+.gate .breed{ width:100%; }
+.gate-skip{ background:none; border:0; color:var(--muted); font-size:13px; text-decoration:underline; text-underline-offset:3px; cursor:pointer; padding:8px; margin-top:6px; }
+.gate-arrow{ position:fixed; left:50%; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%); color:var(--sand); animation:nudge 1.2s ease-in-out infinite; }
+@keyframes nudge{ 0%,100%{ transform:translate(-50%,0); } 50%{ transform:translate(-50%,8px); } }
+@media (prefers-reduced-motion: reduce){ .gate-arrow{ animation:none; } }
 .shell{ max-width:1320px; margin:0 auto; display:flex; flex-direction:column; gap:18px; }
 .top{ display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:16px 32px; }
 .brand h1{ font-family:var(--display); font-weight:700; font-size:clamp(30px,4vw,42px); line-height:1; margin:0 0 6px; letter-spacing:.01em; color:var(--sand); text-wrap:balance; }
@@ -252,6 +271,19 @@ button{ font:inherit; }
       </div>
     </aside>
   </main>
+</div>
+
+<div class="gate" id="gate" hidden>
+  <div class="gate-card">
+    <img class="gate-icon" src="icons/icon-192.png" alt="" width="96" height="96">
+    <h2>Install Hybrid Reef</h2>
+    <p class="gate-lede">Add the game to your home screen first. It opens full-screen like a normal app, works offline, and keeps your reef saved.</p>
+    <div id="gateSteps"></div>
+    <button class="gate-skip" id="gateSkip" type="button">Can't install? Play in the browser</button>
+  </div>
+  <div class="gate-arrow" id="gateArrow" hidden aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="30" height="30"><path d="M12 3v16m0 0-6-6m6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </div>
 </div>
 
 <div class="modal" id="nickModal" hidden>
@@ -1142,8 +1174,70 @@ else {
   slots[0] = { g: list[0].g, d: list[0].d, fishId: null };
   if (list[1]) slots[1] = { g: list[1].g, d: list[1].d, fishId: null };
 }
+// ---------- install gate ----------
+const ua = navigator.userAgent;
+const isStandalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
+const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isIPad = /iPad/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/i.test(ua);
+const inAppBrowser = /FBAN|FBAV|FB_IAB|Instagram|Messenger|Line\/|Snapchat|MicroMessenger|GSA\//i.test(ua);
+const BROWSER_OK_KEY = 'hybrid-reef-browser-ok';
+let browserOk = false;
+try { browserOk = localStorage.getItem(BROWSER_OK_KEY) === '1'; } catch (e) {}
+const gate = $('gate'), gateSteps = $('gateSteps');
+let installPrompt = null;
+
+const SHARE_SVG = '<svg viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4 4 4M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const PLUS_SVG = '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+const DOTS_SVG = '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></svg>';
+const KEBAB_SVG = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="19" r="2" fill="currentColor"/></svg>';
+const glyph = svg => `<span class="glyph">${svg}</span>`;
+
+function renderGate() {
+  let html = '';
+  if (inAppBrowser) {
+    html = `<div class="gate-warn">This link opened inside another app, which can't install games. Tap ${glyph(DOTS_SVG)} or ${glyph(KEBAB_SVG)} and choose <b>Open in ${isIOS ? 'Safari' : 'browser'}</b>, then follow the steps there.</div>`;
+  } else if (isIOS) {
+    html = `<ol class="steps">
+      <li><span>Tap the <b>Share</b> button ${glyph(SHARE_SVG)} ${isIPad ? 'at the top right of Safari' : 'at the bottom of Safari'}. If you only see ${glyph(DOTS_SVG)}, tap that first, then <b>Share</b>.</span></li>
+      <li><span>Scroll down and tap <b>Add to Home Screen</b> ${glyph(PLUS_SVG)}. Don't see it? Tap <b>View More</b> or <b>Edit Actions</b>.</span></li>
+      <li><span>Tap <b>Add</b>, then open <b>Hybrid Reef</b> from your home screen.</span></li>
+    </ol>`;
+  } else if (installPrompt) {
+    html = `<button class="breed" id="installBtn" type="button">Install app</button><p class="gate-note">Then open Hybrid Reef from your home screen.</p>`;
+  } else {
+    html = `<ol class="steps">
+      <li><span>Tap the menu ${glyph(KEBAB_SVG)} in the top corner of your browser.</span></li>
+      <li><span>Tap <b>Install app</b> or <b>Add to Home screen</b>.</span></li>
+      <li><span>Open <b>Hybrid Reef</b> from your home screen.</span></li>
+    </ol>`;
+  }
+  gateSteps.innerHTML = html;
+  $('gateArrow').hidden = !(isIOS && !isIPad && !inAppBrowser);
+  const btn = document.getElementById('installBtn');
+  if (btn) btn.addEventListener('click', async () => {
+    const p = installPrompt; installPrompt = null;
+    if (!p) return;
+    p.prompt();
+    try { await p.userChoice; } catch (e) {}
+    renderGate();
+  });
+}
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; if (!gate.hidden) renderGate(); });
+addEventListener('appinstalled', () => {
+  if (gate.hidden) return;
+  gateSteps.innerHTML = `<ol class="steps"><li><span><b>Installed!</b> Close this page and open Hybrid Reef from your home screen.</span></li></ol>`;
+});
+$('gateSkip').addEventListener('click', () => {
+  try { localStorage.setItem(BROWSER_OK_KEY, '1'); } catch (e) {}
+  gate.hidden = true;
+  if (!nick) openNick();
+});
+
 renderSlots(); renderGuide(); renderStats(); showNick(); renderFamily();
-if (!nick) openNick();
+const needsInstall = (isIOS || isAndroid) && !isStandalone && !browserOk;
+if (needsInstall) { renderGate(); gate.hidden = false; }
+else if (!nick) openNick();
 initOnline();
 requestAnimationFrame(t => { last = t; loop(t); });
 setInterval(save, 15000);
