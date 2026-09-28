@@ -109,6 +109,18 @@ body{
 .gate-arrow{ position:fixed; left:50%; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%); color:var(--sand); animation:nudge 1.2s ease-in-out infinite; }
 @keyframes nudge{ 0%,100%{ transform:translate(-50%,0); } 50%{ transform:translate(-50%,8px); } }
 @media (prefers-reduced-motion: reduce){ .gate-arrow{ animation:none; } }
+.drag-ghost{ position:fixed; left:0; top:0; z-index:30; pointer-events:none; display:flex; flex-direction:column; align-items:center; gap:4px; will-change:transform; }
+.drag-ghost img{ width:104px; height:76px; object-fit:contain; image-rendering:pixelated; filter:drop-shadow(0 8px 10px rgba(0,0,0,.55)); transition:transform .12s; }
+.drag-ghost.ready img{ transform:scale(1.18) rotate(-4deg); }
+.drag-ghost .cap{ background:rgba(7,26,34,.95); border:1px solid var(--line); color:var(--text); font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px; white-space:nowrap; }
+.drag-ghost.ready .cap{ border-color:var(--t-mythic); color:var(--t-mythic); }
+body.dragging, body.dragging *{ cursor:grabbing !important; user-select:none; -webkit-user-select:none; }
+.card-pick{ cursor:grab; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+.card-pick img, .slot-img{ -webkit-user-drag:none; -webkit-touch-callout:none; }
+#tank{ -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+.slot.drop-hover{ outline:3px solid var(--t-mythic); outline-offset:2px; }
+.touch-only{ display:none; }
+@media (pointer:coarse){ .touch-only{ display:inline; } }
 .shell{ max-width:1320px; margin:0 auto; display:flex; flex-direction:column; gap:18px; }
 .top{ display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:16px 32px; }
 .brand h1{ font-family:var(--display); font-weight:700; font-size:clamp(30px,4vw,42px); line-height:1; margin:0 0 6px; letter-spacing:.01em; color:var(--sand); text-wrap:balance; }
@@ -232,7 +244,7 @@ button{ font:inherit; }
         <div class="reveal" id="reveal" hidden></div>
         <div class="ticker" id="ticker" hidden></div>
       </div>
-      <p class="hint"><span><b>Tap a fish</b> to pick it as a parent</span><span><b>Tap open water</b> to drop food</span><span><b>Tap a guide card</b> to breed any species you've found</span><span><b>− / +</b> on a card to choose who lives in the tank</span></p>
+      <p class="hint"><span><b>Drag one fish onto another</b> to breed them</span><span>Drag from the <b>field guide</b> too</span><span><b>Tap open water</b> to drop food</span><span><b>− / +</b> on a card picks who lives in the tank</span><span class="touch-only">On a phone, <b>press and hold</b> a fish to pick it up</span></p>
 
       <div class="lab">
         <div class="slot a" id="slotA"></div>
@@ -660,10 +672,11 @@ function swimAway(f) {
   f.leaving = true; f.tx = f.x < W / 2 ? -50 : W + 50; f.ty = f.y;
   slots.forEach(s => { if (s && s.fishId === f.id) s.fishId = null; });
 }
-function addToTank(key) {
+function addToTank(key, x, y) {
   const s = species[key];
-  if (!s || residents().length >= CAP) return;
-  const f = spawnFish(s.g);
+  if (!s) return;
+  if (residents().length >= CAP) { showNote('The tank is full. Tap − on a card to make room.'); return; }
+  const f = spawnFish(s.g, x, y);
   puff(f.x, f.y, '#dff1ec', 8);
   save(); renderGuide();
 }
@@ -818,8 +831,8 @@ function drawFish(f, now) {
   ctx.restore();
 }
 
-function drawMarker(f, color, now) {
-  if (Math.floor(now * 3) % 3 === 0) return;
+function drawMarker(f, color, now, steady) {
+  if (!steady && Math.floor(now * 3) % 3 === 0) return;
   const x0 = Math.round(f.x - f.G.W / 2) - 2, x1 = Math.round(f.x + f.G.W / 2) + 1;
   const y0 = Math.round(f.y - f.G.bodyH / 2) - 4, y1 = Math.round(f.y + f.G.bodyH / 2) + 3;
   ctx.fillStyle = color;
@@ -876,21 +889,24 @@ function loop(ts) {
   }
   drawKelp(KELP_FRONT, now, true);
   fish.forEach(f => { const i = held.indexOf(f.id); if (i >= 0) drawMarker(f, i === 0 ? '#e6cc92' : '#ff8f70', now); });
+  if (hoverFishId != null) { const hf = fish.find(f => f.id === hoverFishId); if (hf) drawMarker(hf, '#ffffff', now, true); }
   requestAnimationFrame(loop);
 }
 
 function toTank(e) { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
-function hitFish(x, y) {
+function hitFish(x, y, pad = 0) {
   const sorted = fish.filter(f => !f.leaving).sort((a, b) => b.y - a.y);
-  return sorted.find(f => Math.abs(x - f.x) <= f.G.W / 2 + 2 && Math.abs(y - f.y) <= f.G.bodyH / 2 + 4) || null;
+  return sorted.find(f => Math.abs(x - f.x) <= f.G.W / 2 + 2 + pad && Math.abs(y - f.y) <= f.G.bodyH / 2 + 4 + pad) || null;
 }
+let hoverFishId = null;
 canvas.addEventListener('pointerdown', e => {
   const { x, y } = toTank(e);
-  const f = hitFish(x, y);
-  if (f) { choose(f.g, f.id, f.d.key); puff(f.x, f.y - f.G.bodyH / 2, '#fff4cf', 5); }
-  else if (y < SAND + 2 && food.length < 40) for (let k = 0; k < 3; k++) food.push({ x: clamp(x + rand(-4, 4), 2, W - 2), y: Math.max(4, y + rand(-2, 2)), life: 14, eaten: false });
+  const f = hitFish(x, y, e.pointerType === 'mouse' ? 0 : 3);
+  if (f) {
+    beginPress(e, { g: f.g, d: f.d, fishId: f.id }, () => { choose(f.g, f.id, f.d.key); puff(f.x, f.y - f.G.bodyH / 2, '#fff4cf', 5); });
+  } else if (y < SAND + 2 && food.length < 40) for (let k = 0; k < 3; k++) food.push({ x: clamp(x + rand(-4, 4), 2, W - 2), y: Math.max(4, y + rand(-2, 2)), life: 14, eaten: false });
 });
-canvas.addEventListener('pointermove', e => { const { x, y } = toTank(e); canvas.style.cursor = hitFish(x, y) ? 'pointer' : 'crosshair'; });
+canvas.addEventListener('pointermove', e => { if (drag && drag.active) return; const { x, y } = toTank(e); canvas.style.cursor = hitFish(x, y) ? 'grab' : 'crosshair'; });
 
 // ---------- breeding UI ----------
 const $ = id => document.getElementById(id);
@@ -909,21 +925,28 @@ function renderSlots() {
     el.classList.toggle('filled', !!s);
     el.innerHTML = s
       ? `<img class="slot-img ${fxClass(s.g)}" src="${thumb(s.g)}" alt=""><div class="slot-body"><span class="slot-label">${label}</span><span class="slot-name">${s.d.name}</span><span class="slot-genes">${s.d.traits.join(' · ')}</span></div><button class="slot-x" data-clear="${i}" aria-label="Clear ${label}">×</button>`
-      : `<div><span class="slot-label">${label}</span><span class="slot-empty">Tap a fish in the tank or a card in the guide</span></div>`;
+      : `<div><span class="slot-label">${label}</span><span class="slot-empty">Drop or tap a fish here</span></div>`;
   });
   breedBtn.disabled = !(slots[0] && slots[1]);
 }
 slotEls.forEach(el => el.addEventListener('click', e => { const b = e.target.closest('[data-clear]'); if (b) { slots[+b.dataset.clear] = null; renderSlots(); renderGuide(); } }));
 
-breedBtn.addEventListener('click', () => {
-  const [A, B] = slots; if (!A || !B || eggs.length >= 6) return;
+function layEgg(A, B, x, y) {
+  if (eggs.length >= 6) { showNote('Let a few eggs hatch first.'); return false; }
   const child = breed(A.g, B.g);
+  x = clamp(x, 12, W - 12); y = clamp(y, 16, SAND - 10);
+  eggs.push({ x, y, t: 0, g: child, parents: [A.d.name, B.d.name] });
+  puff(x, y, '#fff4cf', 6);
+  return true;
+}
+breedBtn.addEventListener('click', () => {
+  const [A, B] = slots; if (!A || !B) return;
   const fa = fish.find(f => f.id === A.fishId), fb = fish.find(f => f.id === B.fishId);
   let x, y;
   if (fa && fb) { x = (fa.x + fb.x) / 2; y = (fa.y + fb.y) / 2; }
   else if (fa || fb) { const f = fa || fb; x = f.x; y = f.y; }
   else { x = rand(90, 230); y = rand(50, 120); }
-  eggs.push({ x: clamp(x, 12, W - 12), y: clamp(y, 16, SAND - 10), t: 0, g: child, parents: [A.d.name, B.d.name] });
+  layEgg(A, B, x, y);
 });
 $('surpriseBtn').addEventListener('click', () => {
   const list = Object.values(species);
@@ -989,12 +1012,119 @@ function renderGuide() {
 cardsEl.addEventListener('click', e => {
   const b = e.target.closest('[data-act]'), c = e.target.closest('.card');
   if (!b || !c) return;
+  if (b.dataset.act === 'pick' && performance.now() - lastDragEnd < 400) return;
   const s = species[c.dataset.key]; if (!s) return;
   if (b.dataset.act === 'pick') choose(s.g, null, s.key);
   else if (b.dataset.act === 'add') addToTank(s.key);
   else removeFromTank(s.key);
 });
 qEl.addEventListener('input', renderGuide);
+
+// ---------- drag and drop ----------
+// Drag a fish or a guide card onto another fish to breed them, onto a parent slot to pick it,
+// or into open water to add it to the tank. Touch starts a drag with a short press-and-hold.
+const dragGhost = document.createElement('div');
+dragGhost.className = 'drag-ghost'; dragGhost.hidden = true;
+document.body.appendChild(dragGhost);
+let drag = null, lastDragEnd = 0, hoverSlotEl = null;
+
+function beginPress(e, src, onTap) {
+  if (drag) return;
+  drag = { src, onTap, x0: e.clientX, y0: e.clientY, id: e.pointerId, touch: e.pointerType !== 'mouse', active: false, timer: 0, fromTank: src.fishId != null };
+  if (drag.touch) drag.timer = setTimeout(() => { if (drag && !drag.active) startDrag(drag.x0, drag.y0); }, 260);
+}
+function startDrag(x, y) {
+  drag.active = true;
+  dragGhost.innerHTML = `<img class="${fxClass(drag.src.g)}" src="${thumb(drag.src.g)}" alt=""><span class="cap"></span>`;
+  dragGhost.hidden = false;
+  document.body.classList.add('dragging');
+  try { if (drag.touch && navigator.vibrate) navigator.vibrate(12); } catch (err) {}
+  moveDrag(x, y);
+}
+function dropTargetAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const slot = el.closest('.slot');
+  if (slot) return { type: 'slot', i: slot === slotEls[0] ? 0 : 1, el: slot };
+  if (el === canvas) {
+    const p = toTank({ clientX: x, clientY: y });
+    const f = hitFish(p.x, p.y, drag && drag.touch ? 5 : 3);
+    if (f && f.id !== drag.src.fishId) return { type: 'fish', f };
+    if (p.y < SAND + 4) return { type: 'water', p };
+  }
+  return null;
+}
+function moveDrag(x, y) {
+  dragGhost.style.transform = `translate(${x}px, ${y}px) translate(-50%, -62%)`;
+  const t = dropTargetAt(x, y);
+  hoverFishId = t && t.type === 'fish' ? t.f.id : null;
+  const slotEl = t && t.type === 'slot' ? t.el : null;
+  if (hoverSlotEl !== slotEl) { if (hoverSlotEl) hoverSlotEl.classList.remove('drop-hover'); if (slotEl) slotEl.classList.add('drop-hover'); hoverSlotEl = slotEl; }
+  const cap = dragGhost.querySelector('.cap');
+  let text = '';
+  if (t && t.type === 'fish') text = 'Breed with ' + t.f.d.name;
+  else if (t && t.type === 'slot') text = 'Parent ' + 'AB'[t.i];
+  else if (t && t.type === 'water') text = drag.fromTank ? 'Swim here' : 'Add to tank';
+  cap.textContent = text; cap.hidden = !text;
+  dragGhost.classList.toggle('ready', !!(t && t.type === 'fish'));
+}
+function endDrag() {
+  dragGhost.hidden = true;
+  document.body.classList.remove('dragging');
+  if (hoverSlotEl) hoverSlotEl.classList.remove('drop-hover');
+  hoverSlotEl = null; hoverFishId = null; lastDragEnd = performance.now();
+}
+function finishDrop(d, x, y) {
+  drag = d;
+  const t = dropTargetAt(x, y);
+  drag = null;
+  const src = d.src;
+  if (!t) return;
+  if (t.type === 'fish') {
+    const B = { g: t.f.g, d: t.f.d, fishId: t.f.id };
+    slots[0] = { g: src.g, d: src.d, fishId: src.fishId }; slots[1] = B;
+    renderSlots(); renderGuide();
+    layEgg(slots[0], slots[1], t.f.x, t.f.y - t.f.G.bodyH);
+  } else if (t.type === 'slot') {
+    slots[t.i] = { g: src.g, d: src.d, fishId: src.fishId };
+    renderSlots(); renderGuide();
+  } else if (t.type === 'water') {
+    if (d.fromTank) { const f = fish.find(f => f.id === src.fishId); if (f) { f.tx = t.p.x; f.ty = t.p.y; f.timer = 6; } }
+    else addToTank(src.d.key, t.p.x, t.p.y);
+  }
+}
+addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const dist = Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0);
+  if (!drag.active) {
+    if (drag.touch) { if (dist > 10) { clearTimeout(drag.timer); drag = null; } return; }
+    if (dist < 5) return;
+    startDrag(e.clientX, e.clientY);
+  }
+  moveDrag(e.clientX, e.clientY);
+});
+addEventListener('pointerup', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  clearTimeout(drag.timer);
+  const d = drag; drag = null;
+  if (d.active) { endDrag(); finishDrop(d, e.clientX, e.clientY); }
+  else if (d.onTap) d.onTap();
+});
+addEventListener('pointercancel', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  clearTimeout(drag.timer);
+  if (drag.active) endDrag();
+  drag = null;
+});
+document.addEventListener('touchmove', e => { if (drag && drag.active) e.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', e => { if (drag) e.preventDefault(); });
+cardsEl.addEventListener('dragstart', e => e.preventDefault());
+cardsEl.addEventListener('pointerdown', e => {
+  const b = e.target.closest('.card-pick'), c = e.target.closest('.card');
+  if (!b || !c || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const s = species[c.dataset.key]; if (!s) return;
+  beginPress(e, { g: s.g, d: s.d, fishId: null }, null);
+});
 sortEl.addEventListener('change', renderGuide);
 
 function renderStats() {
@@ -1138,6 +1268,12 @@ function showTicker(r) {
   ticker.hidden = false;
   clearTimeout(tickerTimer);
   tickerTimer = setTimeout(() => { ticker.hidden = true; }, 5000);
+}
+function showNote(text) {
+  ticker.textContent = text;
+  ticker.hidden = false;
+  clearTimeout(tickerTimer);
+  tickerTimer = setTimeout(() => { ticker.hidden = true; }, 3000);
 }
 
 function initOnline() {
