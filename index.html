@@ -1157,11 +1157,23 @@ const nickModal = $('nickModal'), nickInput = $('nickInput'), nickErr = $('nickE
 function showNick() { $('nickLabel').textContent = nick || '—'; }
 function openNick() { nickInput.value = nick; nickErr.textContent = ''; nickModal.hidden = false; setTimeout(() => nickInput.focus(), 30); }
 $('nickEdit').addEventListener('click', openNick);
-$('nickForm').addEventListener('submit', e => {
+// Names match regardless of capitalization or extra spaces ("Grandma" = "grandma ").
+const sameName = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
+async function boardSpelling(v) {
+  // Reuse the spelling already on the family board so one person shows up once.
+  if (!online.ready) return v;
+  try {
+    const pattern = v.replace(/[\\%_]/g, c => '\\' + c);
+    const { data } = await online.client.from('leaderboard').select('discoverer').ilike('discoverer', pattern).limit(1);
+    return data && data[0] && sameName(data[0].discoverer, v) ? data[0].discoverer : v;
+  } catch (err) { return v; }
+}
+$('nickForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const v = nickInput.value.trim().replace(/\s+/g, ' ');
+  let v = nickInput.value.trim().replace(/\s+/g, ' ');
   if (!v) { nickErr.textContent = 'Type a name so the family knows who found what.'; return; }
   if (v.length > 20) { nickErr.textContent = 'Keep it to 20 characters or fewer.'; return; }
+  v = await boardSpelling(v);
   nick = v;
   try { localStorage.setItem(NICK_KEY, nick); } catch (err) {}
   nickModal.hidden = true; showNick(); renderFamily(); flushPending();
@@ -1196,7 +1208,7 @@ async function claim(rec) {
     if (!error) { rec.first = true; rec.by = nick; rec.synced = true; refreshFamily(); return; }
     if (error.code === '23505') {
       const { data } = await c.from('discoveries').select('discoverer').eq('key', rec.key).maybeSingle();
-      rec.first = !!data && data.discoverer === nick; rec.by = data ? data.discoverer : null; rec.synced = true;
+      rec.first = !!data && sameName(data.discoverer, nick); rec.by = data ? data.discoverer : null; rec.synced = true;
       return;
     }
     console.warn('Family board insert failed', error);
@@ -1252,7 +1264,7 @@ function renderFamily() {
   $('famTotal').textContent = online.ready ? online.total.toLocaleString() : '—';
   $('famMeter').style.width = Math.min(100, online.total / TOTAL_SPECIES * 100) + '%';
   $('famBoard').innerHTML = online.board.length
-    ? online.board.map(r => `<li class="${r.discoverer === nick ? 'me' : ''}"><span>${esc(r.discoverer)}</span><span class="n">${Number(r.found) || 0}</span></li>`).join('')
+    ? online.board.map(r => `<li class="${sameName(r.discoverer, nick) ? 'me' : ''}"><span>${esc(r.discoverer)}</span><span class="n">${Number(r.found) || 0}</span></li>`).join('')
     : `<li style="grid-template-columns:1fr"><span style="color:var(--muted)">No discoveries yet. Breed something new!</span></li>`;
   $('famRecent').innerHTML = online.recent.map(r => {
     const g = sanitizeGenome(r.genome);
@@ -1286,7 +1298,7 @@ function initOnline() {
   online.client.channel('discoveries-feed')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'discoveries' }, payload => {
       const r = payload.new || {};
-      if (r.discoverer && r.discoverer !== nick) showTicker(r);
+      if (r.discoverer && !sameName(r.discoverer, nick)) showTicker(r);
       refreshSoon();
     })
     .subscribe();

@@ -1,5 +1,5 @@
 ﻿// Offline support: keeps the game playable without a connection.
-const CACHE = 'hybrid-reef-v3';
+const CACHE = 'hybrid-reef-v4';
 const SHELL = ['./', './index.html', './config.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 const CDN_HOSTS = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 

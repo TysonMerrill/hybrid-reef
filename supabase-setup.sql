@@ -27,10 +27,14 @@ create policy "add discoveries" on public.discoveries
   for insert to anon, authenticated
   with check (discovered_at > now() - interval '5 minutes' and discovered_at < now() + interval '5 minutes');
 
+-- One row per person; "Grandma" and "grandma " count as the same name.
+-- Shows the spelling they used first.
 create or replace view public.leaderboard with (security_invoker = true) as
-  select discoverer, count(*)::int as found, max(discovered_at) as last_found
+  select (array_agg(discoverer order by discovered_at))[1] as discoverer,
+         count(*)::int as found,
+         max(discovered_at) as last_found
   from public.discoveries
-  group by discoverer;
+  group by lower(btrim(discoverer));
 
 grant select on public.discoveries to anon, authenticated;
 grant insert on public.discoveries to anon, authenticated;
