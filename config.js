@@ -1,9 +1,8 @@
-// Family board settings. Paste your Supabase project's URL and public key here
-// (Supabase dashboard → Project Settings → API). The public "anon" or
-// "publishable" key is meant to be shipped in web pages; never paste the
-// secret / service_role key.
-// Leave these blank to play solo without the family board.
+// Family board settings (Supabase dashboard → Project Settings → API Keys).
+// The publishable key is meant to be shipped in web pages; never paste the
+// secret / service_role key here.
+// Blank these out to play solo without the family board.
 window.REEF_CONFIG = {
-  supabaseUrl: "",
-  supabaseAnonKey: ""
+  supabaseUrl: "https://sozzmensveudgjbwaskw.supabase.co",
+  supabaseAnonKey: "sb_publishable_e7sewJ3CEUgf_T4lxu1rQA_tBDpjBff"
 };
